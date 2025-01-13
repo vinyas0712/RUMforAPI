@@ -9,6 +9,14 @@
   <link rel="stylesheet" type="text/css" href="./style/style.css" title="style" />
   <script defer src='https://portalstage.catchpoint.com/jp/91957/v4.0.6/InitialLoadScript.js'></script>
   <!-- <script type="application/javascript" src="rprofiler.js"></script> -->
+
+  <script language="javascript" type="text/javascript">
+    function init() {
+    window.RProfiler.addInfo('indicator', 'anotherindicator', 72345876543112456);
+    
+    }
+    window.RProfiler ? init() : window.addEventListener("GlimpseLoaded", init);
+    </script>
 </head>
 
 <body>
