@@ -23,6 +23,12 @@
     }
     window.RProfiler ? init() : window.addEventListener("GlimpseLoaded", init);
   </script>
+  <script language="javascript" type="text/javascript">
+    function init() {
+      window.RProfiler.excludeBenchMarks();
+    }
+    window.RProfiler ? init() : window.addEventListener("GlimpseLoaded", init);
+  </script>
 
 </head>
 
