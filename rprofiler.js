@@ -36,26 +36,21 @@ var getVisibilityWatcher = function () {
         }
     };
 };
-var getRating = function (value, thresholds) {
-    if (value > thresholds[1]) {
-        return 'poor';
-    }
-    if (value > thresholds[0]) {
-        return 'needs-improvement';
-    }
-    return 'good';
+var onBFCacheRestore = function (cb) {
+    addEventListener('pageshow', function (event) {
+        if (event.persisted) {
+            cb(event);
+        }
+    }, true);
 };
-var bindReporter = function (callback, metric, thresholds, reportAllChanges) {
+var bindReporter = function (callback, metric, reportAllChanges) {
     var prevValue;
-    var delta;
     return function (forceReport) {
         if (metric.value >= 0) {
             if (forceReport || reportAllChanges) {
-                delta = metric.value - (prevValue || 0);
-                if (delta || prevValue === undefined) {
+                metric.delta = metric.value - (prevValue || 0);
+                if (metric.delta || prevValue === undefined) {
                     prevValue = metric.value;
-                    metric.delta = delta;
-                    metric.rating = getRating(metric.value, thresholds);
                     callback(metric);
                 }
             }
@@ -75,356 +70,160 @@ var onHidden = function (cb, once) {
     addEventListener('visibilitychange', onHiddenOrPageHide, true);
     addEventListener('pagehide', onHiddenOrPageHide, true);
 };
-var observe = function (type, callback, opts) {
+var observe = function (type, callback) {
     try {
-        if (PerformanceObserver.supportedEntryTypes.includes(type)) {
-            var po_1 = new PerformanceObserver(function (list) {
-                Promise.resolve().then(function () {
-                    callback(list.getEntries());
-                });
-            });
-            po_1.observe(Object.assign({
-                type: type,
-                buffered: true,
-            }, opts || {}));
-            return po_1;
+        if (PerformanceObserver.supportedEntryTypes.indexOf(type) > -1) {
+            if (type === 'first-input' && !('PerformanceEventTiming' in self)) {
+                return;
+            }
+            var po = new PerformanceObserver(function (l) { return l.getEntries().map(callback); });
+            po.observe({ type: type, buffered: true });
+            return po;
         }
     }
     catch (e) {
     }
     return;
 };
-var doubleRAF = function (cb) {
-    requestAnimationFrame(function () { return requestAnimationFrame(function () { return cb(); }); });
-};
-var FCPThresholds = [1800, 3000];
 var getFCP = function (onReport, reportAllChanges) {
-    whenActivated(function () {
-        var visibilityWatcher = getVisibilityWatcher();
-        var metric = initMetric('FCP');
-        var report;
-        var handleEntries = function (entries) {
-            entries.forEach(function (entry) {
-                if (entry.name === 'first-contentful-paint') {
-                    po.disconnect();
-                    if (entry.startTime < visibilityWatcher.firstHiddenTime) {
-                        metric.value = Math.max(entry.startTime - getActivationStart(), 0);
-                        metric.entries.push(entry);
-                        report(true);
-                    }
-                }
-            });
-        };
-        var po = observe('paint', handleEntries);
-        if (po) {
-            report = bindReporter(onReport, metric, FCPThresholds, reportAllChanges);
-            onBFCacheRestore(function (event) {
-                metric = initMetric('FCP');
-                report = bindReporter(onReport, metric, FCPThresholds, reportAllChanges);
-                doubleRAF(function () {
+    var visibilityWatcher = getVisibilityWatcher();
+    var metric = initMetric('FCP');
+    var report;
+    var entryHandler = function (entry) {
+        if (entry.name === 'first-contentful-paint') {
+            if (po) {
+                po.disconnect();
+            }
+            if (entry.startTime < visibilityWatcher.firstHiddenTime) {
+                metric.value = entry.startTime;
+                metric.entries.push(entry);
+                report(true);
+            }
+        }
+    };
+    var fcpEntry = window.performance && performance.getEntriesByName &&
+        performance.getEntriesByName('first-contentful-paint')[0];
+    var po = fcpEntry ? null : observe('paint', entryHandler);
+    if (fcpEntry || po) {
+        report = bindReporter(onReport, metric, reportAllChanges);
+        if (fcpEntry) {
+            entryHandler(fcpEntry);
+        }
+        onBFCacheRestore(function (event) {
+            metric = initMetric('FCP');
+            report = bindReporter(onReport, metric, reportAllChanges);
+            requestAnimationFrame(function () {
+                requestAnimationFrame(function () {
                     metric.value = performance.now() - event.timeStamp;
                     report(true);
                 });
             });
-        }
-    });
-};
-var getNavigationEntryFromPerformanceTiming = function () {
-    var timing = performance.timing;
-    var type = performance.navigation.type;
-    var navigationEntry = {
-        entryType: 'navigation',
-        startTime: 0,
-        type: type == 2 ? 'back_forward' : type === 1 ? 'reload' : 'navigate',
-    };
-    for (var key in timing) {
-        if (key !== 'navigationStart' && key !== 'toJSON') {
-            navigationEntry[key] = Math.max(timing[key] -
-                timing.navigationStart, 0);
-        }
+        });
     }
-    return navigationEntry;
-};
-var getNavigationEntry = function () {
-    if (window.__WEB_VITALS_POLYFILL__) {
-        return (window.performance &&
-            ((performance.getEntriesByType &&
-                performance.getEntriesByType('navigation')[0]) ||
-                getNavigationEntryFromPerformanceTiming()));
-    }
-    else {
-        return (window.performance &&
-            performance.getEntriesByType &&
-            performance.getEntriesByType('navigation')[0]);
-    }
-};
-var bfcacheRestoreTime = -1;
-var getBFCacheRestoreTime = function () { return bfcacheRestoreTime; };
-var onBFCacheRestore = function (cb) {
-    addEventListener('pageshow', function (event) {
-        if (event.persisted) {
-            bfcacheRestoreTime = event.timeStamp;
-            cb(event);
-        }
-    }, true);
-};
-var getActivationStart = function () {
-    var navEntry = getNavigationEntry();
-    return (navEntry && navEntry.activationStart) || 0;
 };
 var initMetric = function (name, value) {
-    var navEntry = getNavigationEntry();
-    var navigationType = 'navigate';
-    if (getBFCacheRestoreTime() >= 0) {
-        navigationType = 'back-forward-cache';
-    }
-    else if (navEntry) {
-        if (document.prerendering || getActivationStart() > 0) {
-            navigationType = 'prerender';
-        }
-        else if (document.wasDiscarded) {
-            navigationType = 'restore';
-        }
-        else if (navEntry.type) {
-            navigationType = navEntry.type.replace(/_/g, '-');
-        }
-    }
     return {
         name: name,
         value: typeof value === 'undefined' ? -1 : value,
-        rating: 'good',
         delta: 0,
         entries: [],
-        id: generateUniqueID(),
-        navigationType: navigationType,
+        id: generateUniqueID()
     };
 };
+var isMonitoringFCP = false;
+var fcpValue = -1;
 var reportedMetricIDs = {};
-var LCPThresholds = [2500, 4000];
 var getLCP = function (onReport, reportAllChanges) {
-    whenActivated(function () {
-        var visibilityWatcher = getVisibilityWatcher();
-        var metric = initMetric('LCP');
-        var report;
-        var handleEntries = function (entries) {
-            var lastEntry = entries[entries.length - 1];
-            if (lastEntry) {
-                if (lastEntry.startTime < visibilityWatcher.firstHiddenTime) {
-                    metric.value = Math.max(lastEntry.startTime - getActivationStart(), 0);
-                    metric.entries = [lastEntry];
-                    report(false);
-                }
+    var visibilityWatcher = getVisibilityWatcher();
+    var metric = initMetric('LCP');
+    var report;
+    var entryHandler = function (entry) {
+        var value = entry.startTime;
+        if (value < visibilityWatcher.firstHiddenTime) {
+            metric.value = value;
+            metric.entries.push(entry);
+            report(false);
+        }
+    };
+    var po = observe('largest-contentful-paint', entryHandler);
+    if (po) {
+        report = bindReporter(onReport, metric, reportAllChanges);
+        var stopListening_1 = function () {
+            if (!reportedMetricIDs[metric.id]) {
+                po.takeRecords().map(entryHandler);
+                po.disconnect();
+                reportedMetricIDs[metric.id] = true;
+                report(true);
             }
         };
-        var po = observe('largest-contentful-paint', handleEntries);
-        if (po) {
-            report = bindReporter(onReport, metric, LCPThresholds, reportAllChanges);
-            var stopListening_1 = runOnce(function () {
-                if (!reportedMetricIDs[metric.id]) {
-                    handleEntries(po.takeRecords());
-                    po.disconnect();
-                    reportedMetricIDs[metric.id] = true;
-                    report(true);
-                }
-            });
-            ['keydown', 'click'].forEach(function (type) {
-                addEventListener(type, stopListening_1, true);
-            });
-            onHidden(stopListening_1);
-            onBFCacheRestore(function (event) {
-                metric = initMetric('LCP');
-                report = bindReporter(onReport, metric, LCPThresholds, reportAllChanges);
-                doubleRAF(function () {
+        ['keydown', 'click'].forEach(function (type) {
+            addEventListener(type, stopListening_1, { once: true, capture: true });
+        });
+        onHidden(stopListening_1, true);
+        onBFCacheRestore(function (event) {
+            metric = initMetric('LCP');
+            report = bindReporter(onReport, metric, reportAllChanges);
+            requestAnimationFrame(function () {
+                requestAnimationFrame(function () {
                     metric.value = performance.now() - event.timeStamp;
                     reportedMetricIDs[metric.id] = true;
                     report(true);
                 });
             });
-        }
-    });
+        });
+    }
 };
-var runOnce = function (cb) {
-    var called = false;
-    return function (arg) {
-        if (!called) {
-            cb(arg);
-            called = true;
+var getCLS = function (onReport, reportAllChanges) {
+    if (!isMonitoringFCP) {
+        getFCP(function (metric) {
+            fcpValue = metric.value;
+        });
+        isMonitoringFCP = true;
+    }
+    var onReportWrapped = function (arg) {
+        if (fcpValue > -1) {
+            onReport(arg);
         }
     };
-};
-var CLSThresholds = [0.1, 0.25];
-var getCLS = function (onReport, reportAllChanges) {
-    getFCP(runOnce(function () {
-        var metric = initMetric('CLS', 0);
-        var report;
-        var sessionValue = 0;
-        var sessionEntries = [];
-        var handleEntries = function (entries) {
-            entries.forEach(function (entry) {
-                if (!entry.hadRecentInput) {
-                    var firstSessionEntry = sessionEntries[0];
-                    var lastSessionEntry = sessionEntries[sessionEntries.length - 1];
-                    if (sessionValue &&
-                        entry.startTime - lastSessionEntry.startTime < 1000 &&
-                        entry.startTime - firstSessionEntry.startTime < 5000) {
-                        sessionValue += entry.value;
-                        sessionEntries.push(entry);
-                    }
-                    else {
-                        sessionValue = entry.value;
-                        sessionEntries = [entry];
-                    }
-                }
-            });
+    var metric = initMetric('CLS', 0);
+    var report;
+    var sessionValue = 0;
+    var sessionEntries = [];
+    var entryHandler = function (entry) {
+        if (!entry.hadRecentInput) {
+            var firstSessionEntry = sessionEntries[0];
+            var lastSessionEntry = sessionEntries[sessionEntries.length - 1];
+            if (sessionValue &&
+                entry.startTime - lastSessionEntry.startTime < 1000 &&
+                entry.startTime - firstSessionEntry.startTime < 5000) {
+                sessionValue += entry.value;
+                sessionEntries.push(entry);
+            }
+            else {
+                sessionValue = entry.value;
+                sessionEntries = [entry];
+            }
             if (sessionValue > metric.value) {
                 metric.value = sessionValue;
                 metric.entries = sessionEntries;
                 report(true);
             }
-        };
-        var po = observe('layout-shift', handleEntries);
-        if (po) {
-            report = bindReporter(onReport, metric, CLSThresholds, reportAllChanges);
-            onHidden(function () {
-                handleEntries(po.takeRecords());
-                report(true);
-            });
-            onBFCacheRestore(function () {
-                sessionValue = 0;
-                metric = initMetric('CLS', 0);
-                report = bindReporter(onReport, metric, CLSThresholds, reportAllChanges);
-                doubleRAF(function () { return report(); });
-            });
-            setTimeout(report, 0);
         }
-    }));
-};
-var whenActivated = function (callback) {
-    if (document.prerendering) {
-        addEventListener('prerenderingchange', function () { return callback(); }, true);
-    }
-    else {
-        callback();
-    }
-};
-var interactionCountEstimate = 0;
-var minKnownInteractionId = Infinity;
-var maxKnownInteractionId = 0;
-var updateEstimate = function (entries) {
-    entries.forEach(function (e) {
-        if (e.interactionId) {
-            minKnownInteractionId = Math.min(minKnownInteractionId, e.interactionId);
-            maxKnownInteractionId = Math.max(maxKnownInteractionId, e.interactionId);
-            interactionCountEstimate = maxKnownInteractionId
-                ? (maxKnownInteractionId - minKnownInteractionId) / 7 + 1
-                : 0;
-        }
-    });
-};
-var po;
-var getInteractionCount = function () {
-    return po ? interactionCountEstimate : performance.interactionCount || 0;
-};
-var initInteractionCountPolyfill = function () {
-    if ('interactionCount' in performance || po)
-        return;
-    po = observe('event', updateEstimate, {
-        type: 'event',
-        buffered: true,
-        durationThreshold: 0,
-    });
-};
-var INPThresholds = [200, 500];
-var prevInteractionCount = 0;
-var getInteractionCountForNavigation = function () {
-    return getInteractionCount() - prevInteractionCount;
-};
-var MAX_INTERACTIONS_TO_CONSIDER = 10;
-var longestInteractionList = [];
-var longestInteractionMap = {};
-var processEntry = function (entry) {
-    var minLongestInteraction = longestInteractionList[longestInteractionList.length - 1];
-    var existingInteraction = longestInteractionMap[entry.interactionId];
-    if (existingInteraction ||
-        longestInteractionList.length < MAX_INTERACTIONS_TO_CONSIDER ||
-        entry.duration > minLongestInteraction.latency) {
-        if (existingInteraction) {
-            existingInteraction.entries.push(entry);
-            existingInteraction.latency = Math.max(existingInteraction.latency, entry.duration);
-        }
-        else {
-            var interaction = {
-                id: entry.interactionId,
-                latency: entry.duration,
-                entries: [entry],
-            };
-            longestInteractionMap[interaction.id] = interaction;
-            longestInteractionList.push(interaction);
-        }
-        longestInteractionList.sort(function (a, b) { return b.latency - a.latency; });
-        longestInteractionList.splice(MAX_INTERACTIONS_TO_CONSIDER).forEach(function (i) {
-            delete longestInteractionMap[i.id];
+    };
+    var po = observe('layout-shift', entryHandler);
+    if (po) {
+        report = bindReporter(onReportWrapped, metric, reportAllChanges);
+        onHidden(function () {
+            po.takeRecords().map(entryHandler);
+            report(true);
+        });
+        onBFCacheRestore(function () {
+            sessionValue = 0;
+            fcpValue = -1;
+            metric = initMetric('CLS', 0);
+            report = bindReporter(onReportWrapped, metric, reportAllChanges);
         });
     }
-};
-var estimateP98LongestInteraction = function () {
-    var candidateInteractionIndex = Math.min(longestInteractionList.length - 1, Math.floor(getInteractionCountForNavigation() / 50));
-    return longestInteractionList[candidateInteractionIndex];
-};
-var getINP = function (onReport, opts) {
-    opts = opts || {};
-    whenActivated(function () {
-        initInteractionCountPolyfill();
-        var metric = initMetric('INP');
-        var report;
-        var handleEntries = function (entries) {
-            entries.forEach(function (entry) {
-                if (entry.interactionId) {
-                    processEntry(entry);
-                }
-                if (entry.entryType === 'first-input') {
-                    var noMatchingEntry = !longestInteractionList.some(function (interaction) {
-                        return interaction.entries.some(function (prevEntry) {
-                            return (entry.duration === prevEntry.duration &&
-                                entry.startTime === prevEntry.startTime);
-                        });
-                    });
-                    if (noMatchingEntry) {
-                        processEntry(entry);
-                    }
-                }
-            });
-            var inp = estimateP98LongestInteraction();
-            if (inp && inp.latency !== metric.value) {
-                metric.value = inp.latency;
-                metric.entries = inp.entries;
-                report(true);
-            }
-        };
-        var po = observe('event', handleEntries, {
-            durationThreshold: opts.durationThreshold || 40,
-        });
-        report = bindReporter(onReport, metric, INPThresholds, opts.reportAllChanges);
-        if (po) {
-            if ('interactionId' in PerformanceEventTiming.prototype) {
-                po.observe({ type: 'first-input', buffered: true });
-            }
-            onHidden(function () {
-                handleEntries(po.takeRecords());
-                if (metric.value < 0 && getInteractionCountForNavigation() > 0) {
-                    metric.value = 0;
-                    metric.entries = [];
-                }
-                report(true);
-            });
-            onBFCacheRestore(function () {
-                longestInteractionList = [];
-                prevInteractionCount = getInteractionCount();
-                metric = initMetric('INP');
-                report = bindReporter(onReport, metric, INPThresholds, opts.reportAllChanges);
-            });
-        }
-    });
 };
 var windowCurrent = parent.window || window;
 var WindowEvent;
@@ -725,11 +524,11 @@ var AjaxRequestsHandler = (function () {
 var RProfiler = (function () {
     function RProfiler() {
         var _this = this;
-        this.restUrl = "portalstage.catchpoint.com/jp/91957/v3.3.10/M";
+        this.restUrl = "portalstage.catchpoint.com/jp/91957/v3.3.6/M";
         this.startTime = (new Date()).getTime();
         this.eventsTimingHandler = new EventsTimingHandler();
         this.inputDelay = new InputDelayHandler();
-        this.version = "v3.3.10";
+        this.version = "v3.3.6";
         this.info = {};
         this.hasInsight = false;
         this.data = {
@@ -749,11 +548,6 @@ var RProfiler = (function () {
             var metricName = _a.name, metricValue = _a.delta;
             var LCP = metricName === 'LCP' ? metricValue : undefined;
             _this.lcp = LCP;
-        };
-        this.setINP = function (_a) {
-            var metricName = _a.name, metricValue = _a.value;
-            var INP = metricName === 'INP' ? metricValue : undefined;
-            _this.inp = INP;
         };
         this.recordPageLoad = function () {
             _this.data.loadTime = (new Date()).getTime();
@@ -819,41 +613,16 @@ var RProfiler = (function () {
         this.getCPWebVitals = function () {
             getCLS(_this.setCLS, false);
             getLCP(_this.setLCP, false);
-            getINP(_this.setINP, { reportAllChanges: false });
             return {
                 cls: _this.cls,
-                lcp: _this.lcp,
-                inp: _this.inp
+                lcp: _this.lcp
             };
-        };
-        this.attachIframe = function () {
-            var protocol = window.location.protocol;
-            var iframe = document.createElement("iframe");
-            iframe.src = "about:blank";
-            var style = iframe.style;
-            style.position = "absolute";
-            style.top = "-10000px";
-            style.left = "-1000px";
-            iframe.addEventListener('load', function (event) {
-                var frame = event.currentTarget;
-                if (frame && frame.contentDocument) {
-                    var iframeDocument = frame.contentDocument;
-                    var rumScript = iframeDocument.createElement('script');
-                    rumScript.type = 'text/javascript';
-                    rumScript.src = protocol + '//' + _this.restUrl;
-                    iframeDocument.body.appendChild(rumScript);
-                }
-            });
-            if (document.body) {
-                document.body.insertAdjacentElement('afterbegin', iframe);
-            }
         };
         this.eventManager.add(WindowEvent.Load, window, this.recordPageLoad);
         var errorFunc = this.addError;
         this.ajaxHandler = new AjaxRequestsHandler();
         getCLS(this.setCLS, false);
         getLCP(this.setLCP, false);
-        getINP(this.setINP, { reportAllChanges: false });
         function recordJsError(e) {
             var ev = e.target || e.srcElement;
             if (ev.nodeType == 3) {
@@ -878,6 +647,25 @@ var RProfiler = (function () {
         if (!!window["__cpCdnPath"]) {
             this.restUrl = window["__cpCdnPath"].trim();
         }
+        var protocol = window.location.protocol;
+        var iframe = document.createElement("iframe");
+        iframe.src = "about:blank";
+        var style = iframe.style;
+        style.position = "absolute";
+        style.top = "-10000px";
+        style.left = "-1000px";
+        iframe.addEventListener('load', function (event) {
+            var frame = event.currentTarget;
+            if (frame && frame.contentDocument) {
+                var iframeDocument = frame.contentDocument;
+                var rumScript = iframeDocument.createElement('script');
+                rumScript.type = 'text/javascript';
+                rumScript.src = protocol + '//' + _this.restUrl;
+                iframeDocument.body.appendChild(rumScript);
+            }
+        });
+        var topScript = document.getElementsByTagName("script")[0];
+        topScript.parentNode.insertBefore(iframe, topScript);
     }
     RProfiler.prototype.isNullOrEmpty = function (val) {
         if (val === undefined || val === null) {
@@ -1161,15 +949,5 @@ var EventsTimingHandler = (function () {
 var profiler = new RProfiler();
 window["RProfiler"] = profiler;
 window["WindowEvent"] = WindowEvent;
-if (document.readyState === 'complete') {
-    profiler.attachIframe();
-}
-else {
-    document.onreadystatechange = function () {
-        if (document.readyState === 'complete') {
-            profiler.attachIframe();
-        }
-    };
-}
 profiler.dispatchCustomEvent("GlimpseLoaded");
 
