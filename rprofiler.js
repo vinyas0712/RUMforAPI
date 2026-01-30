@@ -1,3 +1,4 @@
+
 /******/ (function() { // webpackBootstrap
 /******/ 	"use strict";
 /******/ 	// The require scope
@@ -3778,4 +3779,244 @@ var RProfiler = /** @class */ (function () {
             var dataLayer = window['CPRUMDataLayer'];
             var originalPush = dataLayer.push;
             // Override push method to auto-process new commands
-    
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            dataLayer.push = function () {
+                var items = [];
+                for (var _i = 0; _i < arguments.length; _i++) {
+                    items[_i] = arguments[_i];
+                }
+                // Call original push first
+                var result = originalPush.apply(dataLayer, items);
+                // Process only the new items immediately
+                _this.runCustomRumTags(items);
+                // Update processed count
+                _this.processedDataLayerCount = dataLayer.length;
+                return result;
+            };
+        };
+        this.eventManager.add(WindowEvent.Load, window, this.recordPageLoad);
+        var errorFunc = this.addError;
+        this.ajaxHandler = new rprofiler_AjaxRequestsHandler();
+        D(this.setCLS, { reportAllChanges: true });
+        ot(this.setLCP, { reportAllChanges: true });
+        rt(this.setINP, { reportAllChanges: true });
+        x(this.setFCP, { reportAllChanges: true });
+        // Frustration event
+        frustrationMetrics.startListeningClickEvent();
+        frustrationMetrics.startListeningMouseMove();
+        function recordJsError(e) {
+            var ev = e.target || e.srcElement;
+            if (ev.nodeType == 3) {
+                ev = ev.parentNode;
+            }
+            errorFunc('N/A', ev.src || ev.URL, -1);
+            return false;
+        }
+        if (!!window['opera']) {
+            this.eventManager.add(WindowEvent.Error, document, recordJsError);
+        }
+        else if ('onerror' in window) {
+            var origOnError_1 = window.onerror;
+            window.onerror = function (msg, url, lineNum) {
+                errorFunc(msg, url !== null && url !== void 0 ? url : '', lineNum !== null && lineNum !== void 0 ? lineNum : 0);
+                if (!!origOnError_1) {
+                    return origOnError_1(msg, url, lineNum);
+                }
+                return false;
+            };
+        }
+        // Event to capture the errors in promise rejection
+        if ('onunhandledrejection' in window) {
+            window.onunhandledrejection = function (errorEvent) {
+                var _a, _b, _c;
+                var fullMessage = (_a = errorEvent.reason.stack) !== null && _a !== void 0 ? _a : '';
+                var atSplitRegex = /\bat\b/;
+                var errorMsg = fullMessage !== '' ? fullMessage.split(atSplitRegex) : [];
+                var fileUrl = errorMsg[1] ? errorMsg[1].replace(/:\d+/g, '') : '';
+                var errorLineNumbers = errorMsg[1] ? errorMsg[1].match(/:\d+/g) : [];
+                var lineNum = errorLineNumbers[0] ? errorLineNumbers[0].replace(':', '') : 0;
+                errorFunc((_c = (_b = errorMsg[0]) === null || _b === void 0 ? void 0 : _b.trim()) !== null && _c !== void 0 ? _c : 'N/A', fileUrl.trim(), lineNum);
+            };
+        }
+        if (!!window['__cpCdnPath']) {
+            this.restUrl = window['__cpCdnPath'].trim();
+        }
+    }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    RProfiler.prototype.isNullOrEmpty = function (val) {
+        if (val === undefined || val === null) {
+            return true;
+        }
+        if (typeof val == 'string') {
+            var str = val;
+            return str.trim().length == 0;
+        }
+        return false;
+    };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    RProfiler.prototype.dispatchCustomEvent = function (event, data) {
+        (function (w) {
+            if (typeof w.CustomEvent === 'function') {
+                return false;
+            }
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            function CustomEvent(event, params) {
+                params = params || { bubbles: false, cancelable: false, detail: undefined };
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                var evt = document.createEvent('CustomEvent');
+                evt.initCustomEvent(event, params.bubbles, params.cancelable, params.detail);
+                return evt;
+            }
+            CustomEvent.prototype = Event.prototype;
+            // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+            // @ts-ignore
+            w.CustomEvent = CustomEvent;
+        })(window); //for the browsers don't support CustomEvent
+        var e = new CustomEvent(event, data ? { detail: data } : undefined);
+        window.dispatchEvent(e);
+    };
+    RProfiler.prototype.checkBrowserIsBot = function () {
+        var _a;
+        var BOT_AGENT = [
+            'bot',
+            'crawl',
+            'datadog',
+            'dynatrace',
+            'newrelic',
+            'ruxit',
+            'spider',
+            'headless',
+            'phantom',
+            'facebookexternalhit',
+            'meta-external', // matches "meta-externalads"
+            'pinterestbot',
+            'headlesschrome',
+            'lighthouse',
+            'catchpoint',
+            'site24x7',
+            'google-read-aloud',
+            'pageburst'
+        ];
+        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+        // @ts-ignore
+        var uaData = navigator === null || navigator === void 0 ? void 0 : navigator.userAgentData;
+        var userAgent = navigator.userAgent.toLowerCase();
+        var BOT_USER_AGENT_REGEX = new RegExp(BOT_AGENT.join('|'), 'i');
+        if (uaData && ((_a = uaData.brands) === null || _a === void 0 ? void 0 : _a.length)) {
+            var isBot_1 = uaData.brands.some(function (brand) { return BOT_USER_AGENT_REGEX.test(brand.brand); });
+            return isBot_1;
+        }
+        var isBot = BOT_USER_AGENT_REGEX.test(userAgent);
+        return isBot;
+    };
+    // Check if the last mile script should be added,
+    // based on benchmark enabled, not a bot, page group allowed and excludeLastMileBenchMarks flag is false
+    RProfiler.prototype.checkLastMileScriptPermissions = function () {
+        var useBenchmark = config.getConfig().useBenchmark;
+        var isNotBot = !this.checkBrowserIsBot();
+        var isPageGroupAllowed = this.runBenchMarkForPageGroup();
+        return useBenchmark && isNotBot && isPageGroupAllowed && !this.excludeLastMileBenchMarks;
+    };
+    RProfiler.prototype.addLastMileScript = function () {
+        // Add lastmile script if conditions are met
+        var canAddLastMileScript = this.checkLastMileScriptPermissions();
+        if (!canAddLastMileScript) {
+            return;
+        }
+        var lastMileUrl = config.getConfig().lastMileUrl;
+        var iframe = document.createElement('iframe');
+        iframe.style.display = 'none';
+        iframe.id = 'lastMileScriptiframe';
+        iframe.srcdoc = "<script defer src=\"".concat(lastMileUrl, "\"></script>");
+        iframe.referrerPolicy = 'no-referrer';
+        document.body.appendChild(iframe);
+        console.log('CP: Lastmile script added');
+    };
+    RProfiler.prototype.getBenchMarksPageGroup = function () {
+        var _a = config.getConfig().benchMarkPageGroups, benchMarkPageGroups = _a === void 0 ? '' : _a;
+        return benchMarkPageGroups === null || benchMarkPageGroups === void 0 ? void 0 : benchMarkPageGroups.split(',');
+    };
+    RProfiler.prototype.excludeBenchMarks = function () {
+        this.excludeLastMileBenchMarks = true;
+    };
+    RProfiler.prototype.setVisitor = function (visitor) {
+        this.visitor = visitor;
+    };
+    return RProfiler;
+}());
+/* harmony default export */ var rprofiler = (RProfiler);
+// cookie consent logic
+var CPRUM = function (command, options) {
+    if (command === 'consentv2') {
+        // Handle consentv2 command
+        var _a = options.analytics_storage, analytics_storage = _a === void 0 ? ConsentV2Type.Granted : _a;
+        switch (analytics_storage) {
+            case ConsentV2Type.Granted:
+            case ConsentV2Type.Denied:
+                config.config.consentv2 = analytics_storage;
+                break;
+            default:
+                // Fallback to default consent if value is different
+                config.config.consentv2 = ConsentV2Type.Granted;
+                break;
+        }
+        // delete local storage and cookie, if denied.
+        if (analytics_storage === ConsentV2Type.Denied) {
+            main_Storage.delete();
+        }
+    }
+    return;
+};
+var profiler = new RProfiler();
+window['RProfiler'] = profiler;
+window['WindowEvent'] = WindowEvent;
+window['CPRUM'] = CPRUM;
+var configInit = function () { return rprofiler_awaiter(void 0, void 0, void 0, function () {
+    return rprofiler_generator(this, function (_a) {
+        switch (_a.label) {
+            case 0:
+                config.initValues();
+                return [4 /*yield*/, main()];
+            case 1:
+                _a.sent();
+                src_visComplete();
+                // Setup automatic processing for future commands
+                profiler.autoRunCPRUMTagDataLayer();
+                // Add last mile script
+                profiler.addLastMileScript();
+                // Add session replay script
+                profiler.addSessionReplayScript();
+                return [2 /*return*/];
+        }
+    });
+}); };
+var init = function () { return rprofiler_awaiter(void 0, void 0, void 0, function () {
+    return rprofiler_generator(this, function (_a) {
+        // if the document state is already complete by the time script is injected - can happen in the case of tag managers like GTM
+        if (document.readyState === 'complete') {
+            configInit();
+        }
+        else {
+            document.addEventListener('readystatechange', function (event) { return rprofiler_awaiter(void 0, void 0, void 0, function () {
+                return rprofiler_generator(this, function (_a) {
+                    // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+                    // @ts-ignore
+                    if (event.target.readyState === 'complete') {
+                        configInit();
+                    }
+                    return [2 /*return*/];
+                });
+            }); });
+        }
+        return [2 /*return*/];
+    });
+}); };
+setTimeout(function () {
+    init();
+}, 500);
+profiler.dispatchCustomEvent('GlimpseLoaded');
+// Process any queued CPRUM data layer commands
+profiler.runCPRUMTagDataLayer();
+
+/******/ })()
+;
