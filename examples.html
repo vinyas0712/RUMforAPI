@@ -11,6 +11,15 @@
  <!-- <script defer src='https://portalstage.catchpoint.com/jp/91957/v4.0.4/InitialLoadScript.js'></script>-->
    <script type="application/javascript" src="rprofiler.js"></script> 
    <script type="application/javascript" src="rprofilersdsdsd.js"></script> 
+  <script>
+    window.CPRUMDataLayer = window.CPRUMDataLayer || [];
+
+    function cpRumTag() {
+      window.CPRUMDataLayer.push(arguments);
+    }
+
+    cpRumTag('benchmarkLog', true);
+  </script>
 
   <script language="javascript" type="text/javascript">
 function init() {
